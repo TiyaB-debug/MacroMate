@@ -5,26 +5,26 @@
 MacroMate is a mobile app for iOS and Android that makes nutrition tracking simple. Log meals in a few taps, see where your calories come from at a glance, and get recipe ideas based on what's already in your kitchen, all while respecting your diet and allergies.
 
 
-##Features
+## Features
 
-###Personalized setup
+### Personalized setup
 A short onboarding flow asks about your age, height, weight, goals, dietary preferences, and allergies. MacroMate then suggests daily calorie and macro targets (using the Mifflin-St Jeor equation), or you can enter your own.
 
-###Daily tracking
+### Daily tracking
 - A color-coded **calorie ring** shows how much of your daily goal comes from breakfast, lunch, dinner, and snacks
 - **Protein, carbs, and fat** progress bars
 - Log food by entering individual ingredients or adding a saved recipe in one tap
 
-###Recipe library
+### Recipe library
 - Save your own recipes with ingredients, steps, tags, and nutrition per serving
 - Search and filter by meal type or favorites
 - Each recipe shows which ingredients you already have at home
 
-###Pantry
+### Pantry
 - Track ingredients by category with expiration dates
 - A **"Use soon"** alert for items about to expire
 
-###Create from Pantry
+### Create from Pantry
 Tell MacroMate what you're craving and it ranks your recipes by how many ingredients you already have, automatically excluding your allergies, diet restrictions, and foods you dislike.
 
 ---
