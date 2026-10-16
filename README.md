@@ -92,7 +92,7 @@ src/
 
 ---
 
-## 🗺️ Roadmap
+##Roadmap
 
 - [x] Figma design
 - [x] All core screens built and working with sample data
