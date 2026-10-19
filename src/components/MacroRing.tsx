@@ -1,8 +1,8 @@
 import { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
-import Svg, { Circle, G } from 'react-native-svg';
+import Svg, { Circle } from 'react-native-svg';
 
-import { colors } from '@/theme';
+import { colors } from '../theme';
 
 export type RingSegment = { value: number; color: string };
 
@@ -12,6 +12,10 @@ type Props = {
   total: number;
   size?: number;
   strokeWidth?: number;
+  /** Space between segments, in pixels. */
+  gap?: number;
+  /** Color of the unfilled part of the ring. */
+  trackColor?: string;
   /** Shown in the middle of the ring. */
   children?: ReactNode;
 };
@@ -24,7 +28,7 @@ type Props = {
  * Used for the daily calorie ring (one segment per meal) and the per-serving
  * macro ring on "Add a recipe" (protein / carbs / fat).
  */
-export function MacroRing({ segments, total, size = 220, strokeWidth = 16, children }: Props) {
+export function MacroRing({ segments, total, size = 220, strokeWidth = 16, gap = 0, trackColor = colors.ringTrack, children }: Props) {
   const r = (size - strokeWidth) / 2;
   const c = 2 * Math.PI * r;
   const center = size / 2;
@@ -40,12 +44,11 @@ export function MacroRing({ segments, total, size = 220, strokeWidth = 16, child
 
   return (
     <View style={{ width: size, height: size }}>
-      <Svg width={size} height={size}>
-        {/* Rotate so drawing starts at 12 o'clock instead of 3 o'clock */}
-        <G rotation={-90} origin={`${center}, ${center}`}>
-          <Circle cx={center} cy={center} r={r} stroke={colors.ringTrack} strokeWidth={strokeWidth} fill="none" />
+      {/* Rotated -90° so drawing starts at 12 o'clock instead of 3 o'clock */}
+      <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
+          <Circle cx={center} cy={center} r={r} stroke={trackColor} strokeWidth={strokeWidth} fill="none" />
           {arcs.map((a) =>
-            a.length > 0 ? (
+            a.length > gap ? (
               <Circle
                 key={a.key}
                 cx={center}
@@ -54,12 +57,11 @@ export function MacroRing({ segments, total, size = 220, strokeWidth = 16, child
                 stroke={a.color}
                 strokeWidth={strokeWidth}
                 fill="none"
-                strokeDasharray={`${a.length} ${c}`}
+                strokeDasharray={`${a.length - gap} ${c}`}
                 strokeDashoffset={-a.start}
               />
             ) : null,
-          )}
-        </G>
+        )}
       </Svg>
       <View style={[StyleSheet.absoluteFill, styles.center]} pointerEvents="none">
         {children}
