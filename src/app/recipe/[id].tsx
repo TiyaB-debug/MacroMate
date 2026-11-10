@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Button } from '@/components/form';
+import { HealthierSwaps } from '@/components/HealthierSwaps';
 import { MacroLegend, MacroRingForMacros } from '@/components/MacroSummary';
 import { Card, Chip, EmptyState, Screen, ScreenHeader } from '@/components/ui';
 import { useData, usesItem } from '@/state/data';
@@ -82,6 +83,8 @@ export default function RecipeDetail() {
           })}
           <Text style={styles.hint}>✓ = in your pantry</Text>
         </Card>
+
+        <HealthierSwaps key={recipe.id} recipe={recipe} />
 
         {recipe.steps ? (
           <Card>
