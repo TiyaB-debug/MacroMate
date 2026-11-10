@@ -1,21 +1,29 @@
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 
 import { Button, FieldLabel, TextField } from '@/components/form';
 import { MacroLegend, MacroRingForMacros } from '@/components/MacroSummary';
 import { Card, Chip, Screen, ScreenHeader } from '@/components/ui';
+import { AIBusyError, parseIngredients } from '@/lib/ai';
 import { newId, Recipe, useData } from '@/state/data';
 import { colors, MEAL_LABELS, MEAL_ORDER, MealType, radius, spacing, type } from '@/theme';
 
 const PRESET_TAGS = ['High Protein', 'Vegetarian', 'Ready in 30', 'Using pantry staples'];
 type Source = 'type' | 'link' | 'photo';
 
+/** Split the ingredients box into clean lines ("- 2 eggs" -> "2 eggs") */
+const toLines = (text: string) =>
+  text
+    .split('\n')
+    .map((l) => l.replace(/^\s*(?:[-•*]|\d+[.)])\s+/, '').trim())
+    .filter(Boolean);
+
 /**
  * "Add a recipe — this will become part of your library".
- * Macros are typed in for now. Once the Supabase edge function exists
- * (Anthropic parses ingredients, USDA supplies nutrition), a
- * "Calculate" button will fill them in from the ingredient list.
+ * "Calculate with Mate" fills in nutrition per serving from the ingredient list
+ * (Gemini estimates grams, USDA supplies nutrition via the parse-ingredients function).
+ * Macros can still be typed or edited by hand.
  */
 export default function AddRecipeRoute() {
   const { id } = useLocalSearchParams<{ id?: string }>();
@@ -46,6 +54,9 @@ function AddRecipeForm({ editId }: { editId?: string }) {
     fat: existing ? String(existing.macros.fat) : '',
   });
   const [error, setError] = useState('');
+  const [calculating, setCalculating] = useState(false);
+  const [calcNote, setCalcNote] = useState('');
+  const [calcWarn, setCalcWarn] = useState('');
 
   const num = (s: string) => Math.max(0, parseInt(s, 10) || 0);
   const parsedMacros = {
@@ -66,11 +77,56 @@ function AddRecipeForm({ editId }: { editId?: string }) {
     setCustomTag('');
   };
 
+  // Ask Mate for the whole recipe's nutrition, then divide by servings
+  const calculate = async () => {
+    const lines = toLines(ingredients);
+    if (!lines.length) {
+      setCalcNote('');
+      setCalcWarn('Add your ingredients first (one per line).');
+      return;
+    }
+    const text = lines.join('\n');
+    if (text.length > 1000) {
+      setCalcNote('');
+      setCalcWarn('That ingredient list is too long for Mate. Try shortening it.');
+      return;
+    }
+
+    setCalculating(true);
+    setCalcNote('');
+    setCalcWarn('');
+    try {
+      const foods = await parseIngredients(text);
+      const found = foods.filter((f) => f.found);
+      const missing = foods.filter((f) => !f.found).map((f) => f.name);
+
+      if (!found.length) {
+        setCalcWarn("Mate couldn't match any of these ingredients. Enter the nutrition yourself.");
+        return;
+      }
+
+      const totals = found.reduce(
+        (t, f) => (f.found ? { calories: t.calories + f.kcal, protein: t.protein + f.protein, carbs: t.carbs + f.carbs, fat: t.fat + f.fat } : t),
+        { calories: 0, protein: 0, carbs: 0, fat: 0 },
+      );
+      const serv = num(servings) || 1;
+      const per = (x: number) => String(Math.round(x / serv));
+      setMacros({ calories: per(totals.calories), protein: per(totals.protein), carbs: per(totals.carbs), fat: per(totals.fat) });
+
+      setCalcNote(
+        `Estimated from ${found.length} ingredient${found.length === 1 ? '' : 's'} for ${serv} serving${serv === 1 ? '' : 's'}` +
+          `${num(servings) ? '' : ' (set Servings above if this makes more)'}. Edit any number if it looks off.`,
+      );
+      if (missing.length) setCalcWarn(`Couldn't find: ${missing.join(', ')}. The numbers may be a bit low.`);
+    } catch (e) {
+      setCalcWarn(e instanceof AIBusyError ? e.message : "Couldn't calculate right now. Try again or enter it yourself.");
+    } finally {
+      setCalculating(false);
+    }
+  };
+
   const save = (draft: boolean) => {
-    const ingredientList = ingredients
-      .split('\n')
-      .map((l) => l.replace(/^\s*(?:[-•*]|\d+[.)])\s+/, '').trim())
-      .filter(Boolean);
+    const ingredientList = toLines(ingredients);
     if (!title.trim()) return setError('Give your recipe a name.');
     if (!draft && !ingredientList.length) return setError('Add at least one ingredient (one per line).');
     setError('');
@@ -176,6 +232,16 @@ function AddRecipeForm({ editId }: { editId?: string }) {
 
             <View style={styles.panel}>
               <Text style={styles.panelTitle}>Nutrition per serving</Text>
+              {calculating ? (
+                <View style={styles.calculating}>
+                  <ActivityIndicator color={colors.primary} />
+                  <Text style={styles.note}>Mate is calculating…</Text>
+                </View>
+              ) : (
+                <Button title="Calculate with Mate" variant="light" onPress={calculate} />
+              )}
+              {calcNote ? <Text style={styles.note}>{calcNote}</Text> : null}
+              {calcWarn ? <Text style={styles.warn}>{calcWarn}</Text> : null}
               <View style={styles.row}>
                 {(['protein', 'carbs', 'fat'] as const).map((k) => (
                   <View key={k} style={{ flex: 1 }}>
@@ -234,4 +300,7 @@ const styles = StyleSheet.create({
   preview: { flexDirection: 'row', alignItems: 'center', gap: spacing.xl },
   body: { ...type.body, color: colors.text, lineHeight: 21 },
   error: { ...type.label, color: '#B3261E' },
+  calculating: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, paddingVertical: spacing.sm },
+  note: { ...type.caption, color: colors.textMuted },
+  warn: { ...type.caption, color: '#B45309' },
 });
