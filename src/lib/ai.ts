@@ -64,6 +64,34 @@ export async function suggestSwaps(
   return callFunction<SwapResult>("suggest-swap", { recipe, user }, "Couldn't get swap ideas right now. Try again in a bit.");
 }
 
+export type PantryCraving = { cuisine: string; include: string; avoid: string; other: string };
+
+export type GeneratedRecipe = {
+  title: string;
+  cuisine: string;
+  minutes: number;
+  servings: number;
+  mealTypes: ('breakfast' | 'lunch' | 'dinner' | 'snacks')[];
+  tags: string[];
+  ingredients: string[];
+  steps: string;
+  macros: { calories: number; protein: number; carbs: number; fat: number }; // per serving, from USDA
+  uncertain: boolean; // USDA couldn't find an ingredient, so the numbers are rougher
+};
+
+// "Create from Pantry": Mate invents new recipes from the pantry, safety-checked, with real nutrition
+export async function createPantryRecipes(
+  pantry: string[],
+  craving: PantryCraving,
+  user: SwapUser,
+): Promise<{ recipes: GeneratedRecipe[]; blocked: number }> {
+  return callFunction<{ recipes: GeneratedRecipe[]; blocked: number }>(
+    "pantry-recipe",
+    { pantry, craving, user },
+    "Mate couldn't create a recipe right now. Try again in a bit.",
+  );
+}
+
 // Recalculate macros when the user edits the grams (no server call needed)
 export function recalc(grams: number, p: Per100g) {
   const f = grams / 100;

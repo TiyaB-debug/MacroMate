@@ -1,12 +1,16 @@
 import { ReactNode, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 
 import { Button, TextField } from '@/components/form';
 import { RecipeCard } from '@/components/RecipeCard';
 import { Card, EmptyState, Screen, ScreenHeader } from '@/components/ui';
-import { matchRecipe, Recipe, useData } from '@/state/data';
+import { AIBusyError, createPantryRecipes, type GeneratedRecipe } from '@/lib/ai';
+import { useMateUser } from '@/lib/mateUser';
+import { matchRecipe, newId, PantryItem, Recipe, useData, usesItem } from '@/state/data';
 import { useProfile } from '@/state/profile';
-import { colors, spacing, type } from '@/theme';
+import { colors, radius, spacing, type } from '@/theme';
 
 // Ingredient words to rule out for each allergy and diet chosen in onboarding.
 const ALLERGY_WORDS: Record<string, string[]> = {
@@ -32,22 +36,27 @@ const terms = (s: string) => s.toLowerCase().split(/[,;]+/).map((t) => t.trim())
 const mentions = (r: Recipe, word: string) => `${r.title} ${r.ingredients.join(' ')}`.toLowerCase().includes(word.replace(/s$/, ''));
 
 type Result = { recipe: Recipe; have: string[]; missing: string[]; score: number };
+type AIState = { status: 'idle' | 'loading' | 'done' | 'error'; recipes: GeneratedRecipe[]; blocked: number; error: string };
 
 /**
- * "Create from Pantry". This first version ranks your saved recipes by how much
- * of each one you already have, with no AI needed. Generating brand-new recipes
- * with Claude can be added later via the Supabase edge function.
+ * "Create from Pantry".
+ * Mate creates brand-new recipes from what's in the pantry and the user's craving
+ * (Gemini writes them, code removes anything unsafe, USDA supplies nutrition).
+ * Saved recipes are also ranked by how much of each one the user already has (no AI needed).
  */
 export default function CreateFromPantry() {
   const { recipes, pantry } = useData();
   const { profile } = useProfile();
+  const mateUser = useMateUser();
   const [cuisine, setCuisine] = useState('');
   const [include, setInclude] = useState('');
   const [avoid, setAvoid] = useState('');
   const [other, setOther] = useState('');
   const [results, setResults] = useState<Result[] | null>(null);
+  const [ai, setAi] = useState<AIState>({ status: 'idle', recipes: [], blocked: 0, error: '' });
 
-  const run = () => {
+  // Instant: rank the user's saved recipes
+  const rankSaved = () => {
     const avoidWords = [
       ...terms(avoid),
       ...profile.dislikes.map((d) => d.toLowerCase()),
@@ -77,6 +86,35 @@ export default function CreateFromPantry() {
     setResults(ranked);
   };
 
+  // A few seconds: Mate creates new recipes
+  const askMate = async () => {
+    if (!pantry.length) {
+      setAi({ status: 'error', recipes: [], blocked: 0, error: 'Add a few items to your pantry first, then Mate can cook with them.' });
+      return;
+    }
+    setAi({ status: 'loading', recipes: [], blocked: 0, error: '' });
+    try {
+      const res = await createPantryRecipes(
+        pantry.map((p) => p.name),
+        { cuisine, include, avoid, other },
+        mateUser,
+      );
+      setAi({ status: 'done', recipes: res.recipes, blocked: res.blocked, error: '' });
+    } catch (e) {
+      setAi({
+        status: 'error',
+        recipes: [],
+        blocked: 0,
+        error: e instanceof AIBusyError ? e.message : "Mate couldn't create a recipe right now. Try again in a bit.",
+      });
+    }
+  };
+
+  const run = () => {
+    rankSaved();
+    askMate();
+  };
+
   return (
     <Screen>
       <ScreenHeader title="Create from Pantry" subtitle="Tell us what you're in the mood for and we'll suggest a recipe." back />
@@ -91,16 +129,60 @@ export default function CreateFromPantry() {
           <TextField value={avoid} onChangeText={setAvoid} placeholder="e.g. gluten, dairy, nuts" />
         </Question>
         <Question n={4} label="Any other preferences?">
-          <TextField value={other} onChangeText={setOther} placeholder="e.g. quick, high protein, comfort" />
+          <TextField value={other} onChangeText={setOther} placeholder="e.g. quick, high protein, something warm and spicy" />
         </Question>
         <Text style={styles.note}>Your allergies, diet and disliked foods from setup are always excluded.</Text>
 
-        <Button title="Create Recipe" onPress={run} />
+        <Button title={ai.status === 'loading' ? 'Mate is cooking…' : 'Create Recipe'} onPress={run} disabled={ai.status === 'loading'} />
 
+        {/* Mate's brand-new recipes */}
+        {ai.status !== 'idle' ? (
+          <View style={{ gap: spacing.md }}>
+            <View style={styles.sectionHeader}>
+              <Ionicons name="sparkles-outline" size={18} color={colors.primary} />
+              <Text style={styles.resultsTitle}>Mate&apos;s new recipes</Text>
+            </View>
+
+            {ai.status === 'loading' ? (
+              <Card style={styles.loading}>
+                <ActivityIndicator color={colors.primary} />
+                <Text style={styles.note}>Mate is creating recipes from your pantry…</Text>
+              </Card>
+            ) : null}
+
+            {ai.status === 'error' ? (
+              <Card style={{ gap: spacing.md }}>
+                <Text style={[styles.note, { color: WARN }]}>{ai.error}</Text>
+                {pantry.length ? <Button title="Try again" variant="soft" onPress={askMate} /> : null}
+              </Card>
+            ) : null}
+
+            {ai.status === 'done' && !ai.recipes.length ? (
+              <Card style={{ gap: spacing.md }}>
+                <Text style={styles.note}>
+                  Mate couldn&apos;t make something that fits everything you asked for. Try loosening a preference.
+                </Text>
+                <Button title="Try again" variant="soft" onPress={askMate} />
+              </Card>
+            ) : null}
+
+            {ai.recipes.map((g, i) => (
+              <GeneratedRecipeCard key={`${g.title}-${i}`} recipe={g} pantry={pantry} />
+            ))}
+
+            {ai.status === 'done' && ai.blocked > 0 ? (
+              <Text style={styles.note}>
+                Mate skipped {ai.blocked} idea{ai.blocked === 1 ? '' : 's'} that didn&apos;t fit your allergies, diet, or foods to avoid.
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {/* Ranked saved recipes (no AI) */}
         {results ? (
           results.length ? (
             <View style={{ gap: spacing.md }}>
-              <Text style={styles.resultsTitle}>Best matches</Text>
+              <Text style={styles.resultsTitle}>From your saved recipes</Text>
               {results.map((r) => (
                 <RecipeCard
                   key={r.recipe.id}
@@ -112,7 +194,7 @@ export default function CreateFromPantry() {
                       </Text>
                       {r.missing.length ? (
                         <Text style={styles.matchText} numberOfLines={2}>
-                          You'll need: {r.missing.join(', ')}
+                          You&apos;ll need: {r.missing.join(', ')}
                         </Text>
                       ) : (
                         <Text style={styles.matchText}>You have everything!</Text>
@@ -126,7 +208,7 @@ export default function CreateFromPantry() {
             <Card>
               <EmptyState
                 icon="search-outline"
-                title="No matches"
+                title="No saved matches"
                 message="None of your saved recipes fit. Try fewer filters or add more recipes."
               />
             </Card>
@@ -134,6 +216,83 @@ export default function CreateFromPantry() {
         ) : null}
       </ScrollView>
     </Screen>
+  );
+}
+
+/** One of Mate's new recipes: preview it, then save it to the library */
+function GeneratedRecipeCard({ recipe, pantry }: { recipe: GeneratedRecipe; pantry: PantryItem[] }) {
+  const { saveRecipe } = useData();
+  const [showSteps, setShowSteps] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  const inPantry = (line: string) => pantry.some((p) => usesItem(line, p.name));
+  const haveCount = recipe.ingredients.filter(inPantry).length;
+  const m = recipe.macros;
+
+  const save = () => {
+    const id = newId();
+    saveRecipe({
+      id,
+      title: recipe.title,
+      minutes: recipe.minutes,
+      cuisine: recipe.cuisine,
+      servings: recipe.servings,
+      mealTypes: recipe.mealTypes,
+      tags: recipe.tags.includes('Mate recipe') ? recipe.tags : [...recipe.tags, 'Mate recipe'],
+      ingredients: recipe.ingredients,
+      steps: recipe.steps,
+      macros: m,
+      favorite: false,
+    });
+    setSavedId(id);
+    router.push({ pathname: '/recipe/[id]', params: { id } });
+  };
+
+  return (
+    <Card style={{ gap: spacing.sm }}>
+      <Text style={styles.cardTitle}>{recipe.title}</Text>
+      <Text style={styles.note}>
+        {recipe.minutes} mins • {recipe.cuisine} • {recipe.servings} serving{recipe.servings === 1 ? '' : 's'}
+      </Text>
+      <Text style={styles.macros}>
+        {m.calories} cal · P {m.protein}g · C {m.carbs}g · F {m.fat}g per serving{recipe.uncertain ? ' (rough estimate)' : ''}
+      </Text>
+      <Text style={styles.matchStrong}>
+        You have {haveCount} of {recipe.ingredients.length} ingredients
+      </Text>
+
+      <View style={styles.ingredients}>
+        {recipe.ingredients.map((line) => {
+          const have = inPantry(line);
+          return (
+            <View key={line} style={styles.ingRow}>
+              <Ionicons
+                name={have ? 'checkmark-circle' : 'ellipse-outline'}
+                size={16}
+                color={have ? colors.primary : colors.textMuted}
+              />
+              <Text style={[styles.ingText, !have && { color: colors.textMuted }]}>{line}</Text>
+            </View>
+          );
+        })}
+      </View>
+
+      <Pressable onPress={() => setShowSteps((s) => !s)} accessibilityRole="button">
+        <Text style={styles.link}>{showSteps ? 'Hide steps' : 'Show steps'}</Text>
+      </Pressable>
+      {showSteps ? <Text style={styles.steps}>{recipe.steps}</Text> : null}
+
+      {savedId ? (
+        <Button
+          title="Saved, view recipe"
+          variant="light"
+          icon="checkmark"
+          onPress={() => router.push({ pathname: '/recipe/[id]', params: { id: savedId } })}
+        />
+      ) : (
+        <Button title="Save to my recipes" onPress={save} />
+      )}
+    </Card>
   );
 }
 
@@ -148,11 +307,29 @@ function Question({ n, label, children }: { n: number; label: string; children: 
   );
 }
 
+const WARN = '#B45309';
+
 const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing.xl, gap: spacing.lg, paddingBottom: spacing.xxl },
   q: { ...type.body, fontWeight: '600', color: colors.text },
   note: { ...type.caption, color: colors.textMuted },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   resultsTitle: { ...type.heading, color: colors.text },
+  loading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  cardTitle: { ...type.heading, color: colors.text },
+  macros: { ...type.label, color: colors.text },
+  ingredients: { gap: 4, paddingVertical: spacing.xs },
+  ingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  ingText: { ...type.body, color: colors.text, flex: 1 },
+  steps: {
+    ...type.body,
+    color: colors.text,
+    lineHeight: 21,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.sm,
+    padding: spacing.md,
+  },
+  link: { ...type.label, color: colors.primary },
   match: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing.sm, gap: 2 },
   matchStrong: { ...type.label, color: colors.primary },
   matchText: { ...type.caption, color: colors.textMuted },

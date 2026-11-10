@@ -232,3 +232,51 @@ export function findAvoided(text: string, avoid: string[]): string[] {
   const t = text.toLowerCase();
   return avoid.filter((w) => t.includes(w));
 }
+
+// ---------- Diet rules (checked in code, like allergies) ----------
+const MEAT = ["chicken", "beef", "pork", "turkey", "bacon", "ham", "sausage", "lamb", "veal", "steak", "gelatin", "pepperoni", "prosciutto", "salami"];
+const SEAFOOD = ["fish", "salmon", "tuna", "cod", "shrimp", "prawn", "crab", "lobster", "anchovy", "sardine", "tilapia", "scallop", "clam", "mussel"];
+const ANIMAL = ["milk", "cheese", "yogurt", "yoghurt", "butter", "cream", "whey", "egg", "honey", "ghee", "mayo", "mayonnaise"];
+
+export function dietAvoidWords(diet: string[]): string[] {
+  const d = diet.map((x) => x.toLowerCase());
+  const has = (name: string) => d.some((x) => x.includes(name));
+  const out = new Set<string>();
+  if (has("vegetarian") || has("vegan") || has("pescatarian")) MEAT.forEach((w) => out.add(w));
+  if (has("vegetarian") || has("vegan")) SEAFOOD.forEach((w) => out.add(w));
+  if (has("vegan")) ANIMAL.forEach((w) => out.add(w));
+  if (has("halal")) ["pork", "bacon", "ham", "wine", "prosciutto", "pepperoni", "salami"].forEach((w) => out.add(w));
+  if (has("kosher")) ["pork", "bacon", "ham", "shrimp", "crab", "lobster", "prosciutto", "pepperoni"].forEach((w) => out.add(w));
+  return [...out];
+}
+
+/** Clean a list of strings from the app (drops blanks and non-strings) */
+export const cleanList = (x: unknown) =>
+  Array.isArray(x) ? x.filter((s): s is string => typeof s === "string" && !!s.trim()).map((s) => s.trim()) : [];
+
+// ---------- Nutrition for many ingredient lines at once ----------
+/**
+ * One Gemini call + USDA lookups for a list of ingredient lines.
+ * Returns macros per line, and which lines had something USDA couldn't find.
+ */
+export async function nutritionForLines(lines: string[]): Promise<{ perLine: Macros[]; uncertain: Set<number> }> {
+  const perLine: Macros[] = lines.map(() => zeroMacros());
+  const uncertain = new Set<number>();
+  if (!lines.length) return { perLine, uncertain };
+
+  const numbered = lines.map((l, i) => `${i + 1}. ${l}`).join("\n");
+  const items = await parseFoods(numbered, { withLines: true });
+  const usda = await Promise.all(items.map((it) => lookupUSDA(it.name)));
+
+  items.forEach((it, i) => {
+    const idx = (it.line ?? 0) - 1;
+    if (idx < 0 || idx >= lines.length) return;
+    const found = usda[i];
+    if (!found) {
+      uncertain.add(idx);
+      return;
+    }
+    perLine[idx] = addMacros(perLine[idx], macrosFor(it.grams, found.per100g));
+  });
+  return { perLine, uncertain };
+}
